@@ -41,7 +41,12 @@ export function stringifyTypeTree(
   readonlyStyle: ReadonlyStyle = "keyword",
 ): string {
   if (typeTree.kind === "union") {
-    const unionString = typeTree.types.map((t) => stringifyTypeTree(t, true, readonlyStyle)).join(" | ");
+    const unionString = typeTree.types
+      .map((t) => {
+        const member = stringifyTypeTree(t, true, readonlyStyle);
+        return t.kind === "function" && t.signatures.length === 1 ? `(${member})` : member;
+      })
+      .join(" | ");
 
     if (typeTree.excessMembers > 0) {
       return `${unionString} | ... ${typeTree.excessMembers} more`;
@@ -131,7 +136,8 @@ export function stringifyTypeTree(
         ? `${PARAMS_OPEN}${parametersArray.join(PARAMS_SEPARATOR)}${PARAMS_CLOSE}`
         : parametersString;
 
-      return `(${parametersBlock})${returnTypeChar} ${stringifyTypeTree(returnType, true, readonlyStyle)}`;
+      const typeParameters = s.typeParameters?.length ? `<${s.typeParameters.join(", ")}>` : "";
+      return `${typeParameters}(${parametersBlock})${returnTypeChar} ${stringifyTypeTree(returnType, true, readonlyStyle)}`;
     });
 
     // If there are multiple signatures, wrap them in braces with semi-colons at the end of each line

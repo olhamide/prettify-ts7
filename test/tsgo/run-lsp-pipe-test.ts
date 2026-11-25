@@ -24,6 +24,7 @@ async function main(): Promise<void> {
 
     const info = await session.getTypeInfo(uri, unsavedText.indexOf("UnsavedOnly") + 1, {
       hidePrivateProperties: true,
+      hideEffectInternals: true,
       maxDepth: 2,
       maxProperties: 100,
       maxSubProperties: 5,

@@ -23,6 +23,7 @@ const workspaceDir = path.join(testDir, "workspace");
 
 const options: PrettifyOptions = {
   hidePrivateProperties: true,
+  hideEffectInternals: true,
   maxDepth: 3,
   maxProperties: 100,
   maxSubProperties: 5,
@@ -31,7 +32,7 @@ const options: PrettifyOptions = {
   skippedTypeNames: [],
   unwrapArrays: true,
   unwrapFunctions: true,
-  unwrapGenericArgumentsTypeNames: ["Promise", "TsgoEffect"],
+  unwrapGenericArgumentsTypeNames: ["Promise", "TsgoEffect", "Effect"],
 };
 
 function normalize(input: string): string {
@@ -116,6 +117,42 @@ const depthCases: TestCase[] = [
   },
 ].map((testCase) => ({ ...testCase, file: "tsgo-depth.ts" }));
 
+const effectCases: TestCase[] = [
+  {
+    keyword: "TsgoIpAddress",
+    expected: 'type TsgoIpAddress = { readonly _tag: "Ipv4Address"; } | { readonly _tag: "Ipv6Address"; }',
+  },
+  {
+    keyword: "TsgoOptionNumber",
+    expected: 'type TsgoOptionNumber = { readonly _tag: "None"; } | { readonly _tag: "Some"; readonly value: number; }',
+  },
+  {
+    keyword: "TsgoServerOptions",
+    expected: "type TsgoServerOptions = { readonly port: number; readonly host?: string; }",
+  },
+  {
+    keyword: "TsgoOwnPipeable",
+    expected:
+      'type TsgoOwnPipeable = { _tag: "Own"; pipe: () => string; toString: () => string; "~own/marker": true; }',
+  },
+  {
+    keyword: "tsgoXForwarded",
+    expected: `const tsgoXForwarded: (
+      options: {
+        readonly trustedProxies: ((
+          a: { readonly _tag: "Ipv4Address"; } | { readonly _tag: "Ipv6Address"; }
+        ) => boolean) | readonly string[];
+      }
+    ): <E, R>(
+      httpApp: Effect<HttpServerResponse, E, R | HttpServerRequest>
+    ) => Effect<HttpServerResponse, E, R | HttpServerRequest>`,
+  },
+  {
+    keyword: "tsgoSucceeded",
+    expected: "const tsgoSucceeded: Effect<{ id: number; name: string; }, never, never>",
+  },
+].map((testCase) => ({ ...testCase, file: "tsgo-effect.ts" }));
+
 /** The `prettify-ts7.readonlyStyle: "generic"` setting */
 const genericReadonlyCases: TestCase[] = [
   {
@@ -168,7 +205,7 @@ function readCases(): TestCase[] {
     expected: literal!.slice(1, -1).replace(/\\(.)/g, "$1"),
     knownDifference: knownDifferences[keyword!],
   }));
-  return [...suiteCases, ...extraCases, ...depthCases, ...genericReadonlyCases];
+  return [...suiteCases, ...extraCases, ...depthCases, ...effectCases, ...genericReadonlyCases];
 }
 
 async function main(): Promise<void> {

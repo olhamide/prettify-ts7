@@ -33,6 +33,10 @@ import {
 } from "tsgo-api/unstable/ast";
 
 import type { PrettifyOptions } from "@prettify-ts7/typescript-plugin/src/request";
+import {
+  isEffectInternalMember,
+  isPrivateByName,
+} from "@prettify-ts7/typescript-plugin/src/type-tree/effect-internals";
 import type {
   TypeFunctionSignature,
   TypeInfo,
@@ -340,9 +344,10 @@ async function getSignatureTypeInfo(
   depth: number,
   visited: Set<number>,
 ): Promise<TypeFunctionSignature> {
-  const [returnType, params] = await Promise.all([
+  const [returnType, params, typeParameters] = await Promise.all([
     context.cached.getReturnTypeOfSignature(signature),
     context.cached.getParameters(signature),
+    getSignatureTypeParameters(context, signature),
   ]);
 
   const [returnTypeTree, parameters] = await Promise.all([
@@ -350,7 +355,30 @@ async function getSignatureTypeInfo(
     getParameterTypeInfos(context, params, depth, visited),
   ]);
 
-  return { returnType: returnTypeTree, parameters };
+  return typeParameters.length > 0
+    ? { typeParameters, returnType: returnTypeTree, parameters }
+    : { returnType: returnTypeTree, parameters };
+}
+
+async function getSignatureTypeParameters(context: Context, signature: Signature): Promise<string[]> {
+  if (!signature.typeParameters?.length) return [];
+  const typeParameters = await signature.getTypeParameters();
+  return Promise.all(
+    typeParameters.map(async (typeParameter) => {
+      const [name, constraint] = await Promise.all([
+        context.cached.typeToString(typeParameter, NoTruncation),
+        context.cached.checker.getConstraintOfTypeParameter(typeParameter),
+      ]);
+      if (!constraint) return name;
+      return `${name} extends ${await context.cached.typeToString(constraint, NoTruncation)}`;
+    }),
+  );
+}
+
+const namedTypeText = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:<[\s\S]*>)?$/;
+
+function isNamedTypeText(typeName: string): boolean {
+  return namedTypeText.test(typeName.replace(/^import\(".*?"\)\./, ""));
 }
 
 /**
@@ -399,7 +427,13 @@ function anyTypeTree(): TypeTree {
 /**
  * Recursively get type information by building a TypeTree object from the given type
  */
-async function getTypeTree(context: Context, type: Type, depth: number, visited: Set<number>): Promise<TypeTree> {
+async function getTypeTree(
+  context: Context,
+  type: Type,
+  depth: number,
+  visited: Set<number>,
+  keepNamedTypes = false,
+): Promise<TypeTree> {
   const { cached, options } = context;
 
   // Primitive types
@@ -445,6 +479,14 @@ async function getTypeTree(context: Context, type: Type, depth: number, visited:
 
   visited.add(type.id);
 
+  if (
+    keepNamedTypes &&
+    isNamedTypeText(typeName) &&
+    !matchesTypeName(options.unwrapGenericArgumentsTypeNames, typeName.split("<")[0] ?? typeName)
+  ) {
+    return { kind: "reference", typeName };
+  }
+
   // Unions
   if (apparentType.isUnionType()) {
     const memberTypes = (await cached.getTypesOfUnion(apparentType)) ?? [];
@@ -453,7 +495,7 @@ async function getTypeTree(context: Context, type: Type, depth: number, visited:
       memberTypes
         .slice(0, options.maxUnionMembers)
         .sort(sortUnionTypes)
-        .map((t) => getTypeTree(context, t, depth, new Set(visited))),
+        .map((t) => getTypeTree(context, t, depth, new Set(visited), keepNamedTypes)),
     );
 
     return { kind: "union", typeName, excessMembers, types };
@@ -553,7 +595,9 @@ async function getTypeTree(context: Context, type: Type, depth: number, visited:
         return {
           kind: "generic",
           typeName: targetTypeName,
-          arguments: await Promise.all(typeArguments.map((t) => getTypeTree(context, t, depth, new Set(visited)))),
+          arguments: await Promise.all(
+            typeArguments.map((t) => getTypeTree(context, t, depth, new Set(visited), true)),
+          ),
         };
       }
     }
@@ -575,6 +619,15 @@ async function getTypeTree(context: Context, type: Type, depth: number, visited:
     if (options.hidePrivateProperties) {
       const isPublic = await Promise.all(typeProperties.map((symbol) => isPublicProperty(context, symbol)));
       typeProperties = typeProperties.filter((_, index) => isPublic[index]);
+    }
+    if (options.hideEffectInternals) {
+      typeProperties = typeProperties.filter(
+        (symbol) =>
+          !isEffectInternalMember(
+            symbol.name,
+            symbol.declarations.map((handle) => handle.path),
+          ),
+      );
     }
 
     let indexSignatures = await cached.getIndexInfosOfType(apparentType);
@@ -763,8 +816,7 @@ const memberDeclarationKinds = new Set<SyntaxKind>([
  * Check if an object property is public
  */
 async function isPublicProperty(context: Context, symbol: Symbol): Promise<boolean> {
-  const name = symbol.name;
-  if (name.startsWith("_") || name.startsWith("#")) return false;
+  if (isPrivateByName(symbol.name)) return false;
 
   const memberDeclarations = symbol.declarations.filter((handle) => memberDeclarationKinds.has(handle.kind));
   const declarations = await Promise.all(memberDeclarations.map((handle) => resolveDeclaration(context, handle)));

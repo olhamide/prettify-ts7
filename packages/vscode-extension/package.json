@@ -3,7 +3,7 @@
   "publisher": "danieljs-codes",
   "license": "MIT",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.2.0",
   "main": "./out/extension.js",
   "scripts": {
     "build": "tsc -p . && pnpm esbuild",
@@ -138,6 +138,11 @@
           "type": "boolean",
           "default": true,
           "description": "Hide private properties on an object."
+        },
+        "prettify-ts7.hideEffectInternals": {
+          "type": "boolean",
+          "default": true,
+          "description": "Hide Effect plumbing (pipe, toString, toJSON, _op and ~effect/ type ids) on types from the effect package, so hovers show the fields that matter."
         },
         "prettify-ts7.unwrapFunctions": {
           "type": "boolean",

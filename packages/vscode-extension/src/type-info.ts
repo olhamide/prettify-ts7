@@ -13,6 +13,7 @@ export type PrettifyTypeInfo = TypeInfo & {
 export function getPrettifyOptions(config: vscode.WorkspaceConfiguration): PrettifyOptions {
   return {
     hidePrivateProperties: config.get("hidePrivateProperties", true),
+    hideEffectInternals: config.get("hideEffectInternals", true),
     maxDepth: config.get("maxDepth", 2),
     maxProperties: config.get("maxProperties", 100),
     maxSubProperties: config.get("maxSubProperties", 5),

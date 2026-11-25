@@ -11,6 +11,8 @@ export type PrettifyOptions = {
    */
   hidePrivateProperties: boolean;
 
+  hideEffectInternals: boolean;
+
   /**
    * Determines the maximum depth of the type tree.
    * This limits how deeply nested types will be expanded.

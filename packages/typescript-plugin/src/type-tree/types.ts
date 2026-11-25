@@ -22,6 +22,7 @@ export type TypeFunctionParameter = {
  * Type Tree Function Signatures
  */
 export type TypeFunctionSignature = {
+  typeParameters?: string[];
   returnType: TypeTree;
   parameters: TypeFunctionParameter[];
 };

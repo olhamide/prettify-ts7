@@ -4,12 +4,14 @@ import type { TypeFunctionSignature, TypeInfo, TypeProperty, TypeTree } from "./
 import { getDescendantAtRange } from "./get-ast-node";
 import type { PrettifyOptions } from "../request";
 import { getPositionForVue, isVueProgram } from "./vue";
+import { isEffectInternalMember, isPrivateByName } from "./effect-internals";
 
 let typescript: typeof ts;
 let checker: ts.TypeChecker;
 
 let options: PrettifyOptions = {
   hidePrivateProperties: true,
+  hideEffectInternals: true,
   maxDepth: 2,
   maxProperties: 100,
   maxSubProperties: 5,
@@ -179,7 +181,7 @@ function getConstructorTypeInfo(type: ts.Type, typeChecker: ts.TypeChecker, name
 /**
  * Recursively get type information by building a TypeTree object from the given type
  */
-function getTypeTree(type: ts.Type, depth: number, visited: Set<ts.Type>): TypeTree {
+function getTypeTree(type: ts.Type, depth: number, visited: Set<ts.Type>, keepNamedTypes = false): TypeTree {
   const typeName = checker.typeToString(type, undefined, typescript.TypeFormatFlags.NoTruncation);
   const apparentType = checker.getApparentType(type);
 
@@ -221,13 +223,21 @@ function getTypeTree(type: ts.Type, depth: number, visited: Set<ts.Type>): TypeT
 
   visited.add(type);
 
+  if (
+    keepNamedTypes &&
+    isNamedTypeText(typeName) &&
+    !options.unwrapGenericArgumentsTypeNames.includes(typeName.split("<")[0] ?? typeName)
+  ) {
+    return { kind: "reference", typeName };
+  }
+
   // Unions
   if (apparentType.isUnion()) {
     const excessMembers = Math.max(0, apparentType.types.length - options.maxUnionMembers);
     const types = apparentType.types
       .slice(0, options.maxUnionMembers)
       .sort(sortUnionTypes)
-      .map((t) => getTypeTree(t, depth, new Set(visited)));
+      .map((t) => getTypeTree(t, depth, new Set(visited), keepNamedTypes));
 
     return {
       kind: "union",
@@ -272,7 +282,15 @@ function getTypeTree(type: ts.Type, depth: number, visited: Set<ts.Type>): TypeT
           };
         });
 
-        return { returnType, parameters };
+        const typeParameters = (signature.getTypeParameters() ?? []).map((typeParameter) => {
+          const name = checker.typeToString(typeParameter);
+          const constraint = typeParameter.getConstraint();
+          return constraint
+            ? `${name} extends ${checker.typeToString(constraint, undefined, typescript.TypeFormatFlags.NoTruncation)}`
+            : name;
+        });
+
+        return typeParameters.length > 0 ? { typeParameters, returnType, parameters } : { returnType, parameters };
       });
 
     // If there are more signatures than the max allowed, count them as excess
@@ -342,7 +360,7 @@ function getTypeTree(type: ts.Type, depth: number, visited: Set<ts.Type>): TypeT
       return {
         kind: "generic",
         typeName: targetTypeName,
-        arguments: typeArguments.map((argument) => getTypeTree(argument, depth, new Set(visited))),
+        arguments: typeArguments.map((argument) => getTypeTree(argument, depth, new Set(visited), true)),
       };
   }
 
@@ -358,6 +376,15 @@ function getTypeTree(type: ts.Type, depth: number, visited: Set<ts.Type>): TypeT
     let typeProperties = apparentType.getProperties();
     if (options.hidePrivateProperties) {
       typeProperties = typeProperties.filter((symbol) => isPublicProperty(symbol));
+    }
+    if (options.hideEffectInternals) {
+      typeProperties = typeProperties.filter(
+        (symbol) =>
+          !isEffectInternalMember(
+            symbol.getName(),
+            (symbol.getDeclarations() ?? []).map((declaration) => declaration.getSourceFile().fileName),
+          ),
+      );
     }
 
     let indexSignatures = checker.getIndexInfosOfType(apparentType);
@@ -525,8 +552,7 @@ function isPublicProperty(symbol: ts.Symbol): boolean {
   const declarations = symbol.getDeclarations();
   if (!declarations) return true;
 
-  const name = symbol.getName();
-  if (name.startsWith("_") || name.startsWith("#")) return false;
+  if (isPrivateByName(symbol.getName())) return false;
 
   return declarations.every((declaration) => {
     if (
@@ -549,6 +575,12 @@ function isPublicProperty(symbol: ts.Symbol): boolean {
 
     return !hasPrivateOrProtectedModifier;
   });
+}
+
+const namedTypeText = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:<[\s\S]*>)?$/;
+
+function isNamedTypeText(typeName: string): boolean {
+  return namedTypeText.test(typeName.replace(/^import\(".*?"\)\./, ""));
 }
 
 /**

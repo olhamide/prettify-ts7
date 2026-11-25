@@ -29,6 +29,7 @@ const resultsDir = path.join(benchDir, "results");
 /** The extension's default settings (packages/vscode-extension/package.json) */
 const options: PrettifyOptions = {
   hidePrivateProperties: true,
+  hideEffectInternals: true,
   maxDepth: 2,
   maxProperties: 100,
   maxSubProperties: 5,
