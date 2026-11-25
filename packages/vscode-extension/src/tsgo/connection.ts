@@ -6,13 +6,22 @@ import { TsgoHoverSession } from "./hover-session";
 /** The TypeScript 7 VS Code extension ("TypeScript (Native Preview)") */
 const TSGO_EXTENSION_ID = "TypeScriptTeam.native-preview";
 
-/** The API exported by the TypeScript 7 VS Code extension's `activate` */
-type TsgoExtensionApi = {
-  onLanguageServerInitialized(listener: () => unknown): vscode.Disposable;
-  initializeAPIConnection(pipe?: string): Promise<string>;
+type TsgoApiConnection = string | { pipe: string };
+
+type TsgoSdk = {
+  initializeAPIConnection(pipe?: string): Promise<TsgoApiConnection>;
 };
 
+/** The API exported by the TypeScript 7 VS Code extension's `activate` */
+type TsgoExtensionApi = {
+  onLanguageServerInitialized(listener: (sdk: TsgoSdk | undefined) => unknown): vscode.Disposable;
+  initializeAPIConnection?: TsgoSdk["initializeAPIConnection"];
+};
+
+const SDK_WAIT_TIMEOUT_MS = 15_000;
+
 let sessionPromise: Promise<TsgoHoverSession> | undefined;
+let latestSdk: TsgoSdk | undefined;
 let listeningForRestarts = false;
 
 export const tsgoOutputChannel = vscode.window.createOutputChannel("Prettify TS 7");
@@ -35,9 +44,38 @@ async function getTsgoExtensionApi(): Promise<TsgoExtensionApi | undefined> {
   if (!extension) return undefined;
 
   const exports = extension.isActive ? extension.exports : await extension.activate();
-  if (!exports || typeof exports.initializeAPIConnection !== "function") return undefined;
+  if (!exports || typeof exports.onLanguageServerInitialized !== "function") return undefined;
 
   return exports;
+}
+
+function waitForTsgoSdk(extensionApi: TsgoExtensionApi): Promise<TsgoSdk | undefined> {
+  if (typeof extensionApi.initializeAPIConnection === "function") {
+    return Promise.resolve({ initializeAPIConnection: extensionApi.initializeAPIConnection.bind(extensionApi) });
+  }
+  if (latestSdk) return Promise.resolve(latestSdk);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (sdk: TsgoSdk | undefined) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      queueMicrotask(() => {
+        subscription.dispose();
+      });
+      resolve(sdk);
+    };
+    const timer = setTimeout(() => finish(undefined), SDK_WAIT_TIMEOUT_MS);
+    const subscription = extensionApi.onLanguageServerInitialized((sdk) => {
+      if (sdk) latestSdk = sdk;
+      finish(sdk);
+    });
+  });
+}
+
+function toPipe(connection: TsgoApiConnection): string {
+  return typeof connection === "string" ? connection : connection.pipe;
 }
 
 /**
@@ -60,11 +98,17 @@ export async function getTsgoSession(): Promise<TsgoHoverSession | undefined> {
 
   if (!listeningForRestarts) {
     listeningForRestarts = true;
-    extensionApi.onLanguageServerInitialized(() => resetTsgoApi());
+    extensionApi.onLanguageServerInitialized((sdk) => {
+      if (sdk && sdk === latestSdk) return;
+      if (sdk) latestSdk = sdk;
+      resetTsgoApi();
+    });
   }
 
   sessionPromise ??= (async () => {
-    const pipe = await extensionApi.initializeAPIConnection();
+    const sdk = await waitForTsgoSdk(extensionApi);
+    if (!sdk) throw new Error("TypeScript 7 language server isn't running");
+    const pipe = toPipe(await sdk.initializeAPIConnection());
     tsgoOutputChannel.appendLine(`Connected to TypeScript 7 API at ${pipe}`);
     return new TsgoHoverSession(await API.fromLSPConnection({ pipe }));
   })();
